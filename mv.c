@@ -15,6 +15,8 @@ char globals[GLOBAL_SIZE];
 int nGlobals;
 void* allocGlobal(int size);
 
+Instr * instructions = NULL, * lastInstruction=NULL;
+
 Instr * createInstr(int opcode)
 {
 	Instr* i;

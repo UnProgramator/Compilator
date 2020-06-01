@@ -9,6 +9,7 @@
 #include "ansin.h"
 #include "externfunc.h"
 #include "mv.h"
+#include "gc.h"
 
 
 
@@ -84,10 +85,8 @@ void TextMV() {
 	run(instructions);
 }
 
-
-int main(int argc, char* argv[]) {
-	
-	char *inputFileBuffer = NULL;
+void testTot(int argc, char* argv[]) {
+	char* inputFileBuffer = NULL;
 	char* filename;
 
 	if (argc == 1) {
@@ -112,12 +111,12 @@ int main(int argc, char* argv[]) {
 		exit(-20);
 	}
 
-	//printf("Codul din fisierul %s este corect din punct de vedere semantic\n", fis);
-	//
-	//seeAll(argv[1]);
-	
+	//partea de testare a codului generat
+	//run(labelMain);
+}
 
-
+int main(int argc, char* argv[]) {
+	testTot(argc, argv);
 
 	return 0;
 }	

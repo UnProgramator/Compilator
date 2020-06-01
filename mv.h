@@ -43,7 +43,7 @@ typedef struct _Instr {
 	}args[2];
 	struct _Instr* last, * next; // links to last, next instructions
 }Instr;
-Instr* instructions, * lastInstruction; // double linked list
+extern Instr* instructions, * lastInstruction; // double linked list
 
 extern void mvTest(void);
 extern void run(Instr* IP);
@@ -56,5 +56,16 @@ void pushi(int d);
 int popi();
 void pushc(char c);
 char popc();
+
+//instruction manipulation code
+extern Instr* addInstrI(int opcode, long int val);
+extern Instr* addInstrII(int opcode, long int val1, long int val2);
+extern Instr* addInstrA(int opcode, void* addr);
+extern void deleteInstructionsAfter(Instr* start);
+extern Instr* addInstrAfter(Instr* after, int opcode);
+extern Instr* addInstr(int opcode);
+extern void insertInstrAfter(Instr* after, Instr* i);
+extern Instr* createInstr(int opcode);
+extern void* allocGlobal(int size);
 
 #endif

@@ -52,8 +52,10 @@ int consume(TkCode code) {
 //unit: ( declStruct | declFunc | declVar )* END ;
 int unit() {
 	Token* start = crtToken;
-	Instr* labelMain = addInstr(O_CALL);
+	labelMain = addInstr(O_CALL);
 	addInstr(O_HALT);
+	Instr* startInstr = lastInstruction;
+
 	while (1) {
 		if (declStruct()) {
 			continue;
@@ -67,16 +69,22 @@ int unit() {
 		else break;
 	}
 	if (consume(END)) {
+		labelMain->args[0].addr = findSymbol(&symbols, "main")->addr;
 		return 1;
 	}
-	labelMain->args[0].addr = findSymbol(&symbols, "main")->addr;
+	else {
+		tkerr(crtToken, "Eroare: sintaxa nedefinita");
+	}
+
+	deleteInstructionsAfter(startInstr);
 	crtToken = start;
 	return 0;
 }
 
 //declStruct: STRUCT ID LACC declVar* RACC SEMICOLON ;
-int declStruct() {
+int declStruct() { //gc-ok
 	Token* start = crtToken;
+	Instr* startInstr = lastInstruction;
 	Token* tkName;
 	if (consume(STRUCT)) {
 		tkName = crtToken;
@@ -111,6 +119,7 @@ int declStruct() {
 		else tkerr(crtToken, "numele structurii este invalid sau lipseste");
 	}
 
+	deleteInstructionsAfter(startInstr);
 	crtToken = start;
 	return 0;
 }
@@ -118,6 +127,7 @@ int declStruct() {
 //declVar:  typeBase ID arrayDecl? ( COMMA ID arrayDecl? )* SEMICOLON ;
 int declVar() {
 	Token* start = crtToken;
+	Instr* startInstr = lastInstruction;
 	Token* tkName;
 	Type t;
 	if (typeBase(&t)) {
@@ -152,6 +162,7 @@ int declVar() {
 		}
 	}
 
+	deleteInstructionsAfter(startInstr);
 	crtToken = start;
 	return 0;
 }
@@ -159,6 +170,7 @@ int declVar() {
 //typeBase: INT | DOUBLE | CHAR | STRUCT ID ;
 int typeBase(Type* t) {
 	Token* start = crtToken;
+	Instr* startInstr = lastInstruction;
 	if (consume(INT)) {
 		ADOM_START(typeBase)
 			t->typeBase = TB_INT;
@@ -192,18 +204,21 @@ int typeBase(Type* t) {
 		else tkerr(crtToken, "declaratie de tip structura gresita");
 	}
 
+	deleteInstructionsAfter(startInstr);
 	crtToken = start;
 	return 0;
 }
 
 //arrayDecl: LBRACKET expr? RBRACKET ;
-int arrayDecl(Type*ret) {
+int arrayDecl(Type*ret) { //gc-ok
 	Token* start = crtToken;
+	Instr* startInstr = lastInstruction;
+
 	Instr* instrBeforeExpr;
 	if (consume(LBRACKET)) {
 		RetVal rv;
+		instrBeforeExpr = lastInstruction; //GC
 		if (expr(&rv)) {
-			instrBeforeExpr = lastInstruction; //GC
 			ATIP_START
 				if (!rv.isCtVal)tkerr(crtToken, "the array size is not a constant");
 				if (rv.type.typeBase != TB_INT)tkerr(crtToken, "the array size is not an integer");
@@ -219,6 +234,7 @@ int arrayDecl(Type*ret) {
 		else tkerr(crtToken, "paranteze patrate deschisa dar nu si inchisa");
 	}
 
+	deleteInstructionsAfter(startInstr);
 	crtToken = start;
 	return 0;
 }
@@ -226,13 +242,15 @@ int arrayDecl(Type*ret) {
 //typeName: typeBase arrayDecl? ;
 int typeName(Type* t) {
 	Token* start = crtToken;
+	Instr* startInstr = lastInstruction;
 
-	if (typeBase(NULL)) {
+	if (typeBase(t)) {
 		if (!arrayDecl(t))
 			t->nElements = -1;
 		return 1;
 	}
 
+	deleteInstructionsAfter(startInstr);
 	crtToken = start;
 	return 0;
 }
@@ -240,8 +258,10 @@ int typeName(Type* t) {
 /*declFunc: ( typeBase MUL? | VOID ) ID 
                         LPAR ( funcArg ( COMMA funcArg )* )? RPAR 
                         stmCompound ;	*/
-int declFunc() {
+int declFunc() { //gc-nu
 	Token* start = crtToken;
+	Instr* startInstr = lastInstruction;
+
 	Token* tkName;
 	int isFun = 0;
 	Type t;
@@ -303,13 +323,16 @@ int declFunc() {
 		}
 	}
 
+	deleteInstructionsAfter(startInstr);
 	crtToken = start;
 	return 0;
 }
 
 //funcArg: typeBase ID arrayDecl? ;
-int funcArg() {
+int funcArg() { //gc-ok
 	Token* start = crtToken;
+	Instr* startInstr = lastInstruction;
+
 	Token* tkName;
 	Type t;
 	if (typeBase(&t)) {
@@ -325,10 +348,19 @@ int funcArg() {
 				struct_elems->mem = MEM_ARG;
 				struct_elems->type = t;
 			ADOM_END
+			//GC - start
+				//for each "s" (the one as local var and the one as arg):
+				struct_elems->offset = offset;
+				//only once at the end, after "offset" is used and "s->type" is set
+				offset += typeArgSize(&struct_elems->type);
+
+			//GC - end
 			return 1;
 		}
 		else tkerr(crtToken, "ID parametru functie invalid sau inexistent");
 	}
+
+	deleteInstructionsAfter(startInstr);
 	crtToken = start;
 	return 0;
 }
@@ -416,7 +448,7 @@ static int _exprStm() {
 }
 
 
-int stm() {
+int stm() { //gc-nu
 	if (stmCompound()) return 1;
 	if (_ifStm()) return 1;
 	if (_whileStm()) return 1;
@@ -430,6 +462,8 @@ int stm() {
 //stmCompound: LACC ( declVar | stm )* RACC ;
 int stmCompound() {
 	Token* start = crtToken;
+	Instr* startInstr = lastInstruction;
+
 	Symbol* crtSymbol = symbols.end[-1];
 
 
@@ -448,6 +482,7 @@ int stmCompound() {
 		else tkerr(crtToken,"acoladele nu sunt bine imperecheate");
 	}
 
+	deleteInstructionsAfter(startInstr);
 	crtToken = start;
 	return 0;
 }
@@ -459,6 +494,8 @@ int expr(RetVal* rv) {
 //exprAssign: exprUnary ASSIGN exprAssign | exprOr ;
 int exprAssign(RetVal* rv) {
 	Token* start = crtToken;
+	Instr* startInstr = lastInstruction, *i;
+
 	RetVal rve;
 	if (exprUnary(rv)) {
 		if (consume(ASSIGN)) {
@@ -468,12 +505,20 @@ int exprAssign(RetVal* rv) {
 					if (rv->type.nElements > -1 || rve.type.nElements > -1)
 						tkerr(crtToken, "the arrays cannot be assigned");
 					cast(&rv->type, &rve.type);
+					//GC - start
+						i = getRVal(&rve);
+						addCastInstr(i, &rve.type, &rv->type);
+						//duplicate the value on top before the dst addr
+						addInstrII(O_INSERT,sizeof(void*) + typeArgSize(&rv->type),typeArgSize(&rv->type));
+						addInstrI(O_STORE, typeArgSize(&rv->type));
+					//GC - end
 					rv->isCtVal = rv->isLVal = 0;
 				ATIP_END
 				return 1;
 			}
 			tkerr(crtToken, "Atribuire invalida");
 		}
+		deleteInstructionsAfter(startInstr);
 		crtToken = start;
 	}
 	return exprOr(rv);
@@ -506,8 +551,10 @@ int expOr(){
 		rv->type=createType(TB_INT,-1);
 		rv->isCtVal=rv->isLVal=0;
 */
-int exprOr(RetVal* rv){
+int exprOr(RetVal* rv){ // gc-ok
 	RetVal rve;
+	Instr* i1, * i2; // GC
+	Type t, t1, t2; // GC
 	if (!exprAnd(rv)) return 0;
 	while (1) {
 		if (consume(OR)) {
@@ -515,6 +562,24 @@ int exprOr(RetVal* rv){
 				ATIP_START
 					if (rv->type.typeBase == TB_STRUCT || rve.type.typeBase == TB_STRUCT)
 						tkerr(crtToken, "a structure cannot be logically tested");
+					//GC - start
+						i1 = rv->type.nElements < 0 ? getRVal(rv) : lastInstruction;
+						t1 = rv->type;
+						if (rv->type.nElements >= 0) {      // vectors
+							addInstr(O_OR_A);
+						}
+						else {  // non-vectors
+							i2 = getRVal(&rve); t2 = rve.type;
+							t = getArithType(&t1, &t2);
+							addCastInstr(i1, &t1, &t);
+							addCastInstr(i2, &t2, &t);
+							switch (t.typeBase) {
+							case TB_INT:addInstr(O_OR_I); break;
+							case TB_DOUBLE:addInstr(O_OR_D); break;
+							case TB_CHAR:addInstr(O_OR_C); break;
+							}
+						}
+					//GC - end
 					rv->type = createType(TB_INT, -1);
 					rv->isCtVal = rv->isLVal = 0;
 				ATIP_END
@@ -528,8 +593,10 @@ int exprOr(RetVal* rv){
 }
 
 /*exprAnd:rv = exprAnd:rv AND exprEq:rve | exprEq:rv  ==>  exprAnd = exprEq (AND exprEq)* ;  */
-int exprAnd(RetVal* rv) {
+int exprAnd(RetVal* rv) { //gc-ok
 	RetVal rve;
+	Instr* i1, * i2; // GC
+	Type t, t1, t2; // GC
 	if (!exprEq(rv)) return 0;
 	while (1) {
 		if (consume(AND)) {
@@ -537,6 +604,26 @@ int exprAnd(RetVal* rv) {
 				ATIP_START
 					if (rv->type.typeBase == TB_STRUCT || rve.type.typeBase == TB_STRUCT)
 						tkerr(crtToken, "a structure cannot be logically tested");
+					//GC - start
+						i1 = rv->type.nElements < 0 ? getRVal(rv) : lastInstruction;
+						t1 = rv->type;
+
+						if (rv->type.nElements >= 0) {      // vectors
+							addInstr(O_AND_A);
+						}
+						else {  // non-vectors
+							i2 = getRVal(&rve); t2 = rve.type;
+							t = getArithType(&t1, &t2);
+							addCastInstr(i1, &t1, &t);
+							addCastInstr(i2, &t2, &t);
+							switch (t.typeBase) {
+							case TB_INT:addInstr(O_AND_I); break;
+							case TB_DOUBLE:addInstr(O_AND_D); break;
+							case TB_CHAR:addInstr(O_AND_C); break;
+							}
+						}
+
+					//GC - end
 					rv->type = createType(TB_INT, -1);
 					rv->isCtVal = rv->isLVal = 0;
 				ATIP_END
@@ -550,15 +637,47 @@ int exprAnd(RetVal* rv) {
 }
 
 //exprEq: exprEq ( EQUAL | NOTEQ ) exprRel | exprRel  ==> exprEq: exprRel ((EQUAL|NOTEQ) exprRel)*;
-int exprEq(RetVal* rv){
+int exprEq(RetVal* rv){ //gc-ok
 	RetVal rve;
+	Token* tkop;
+	Instr* i1, * i2; // GC
+	Type t, t1, t2; // GC
 	if (!exprRel(rv)) return 0;
 	while (1) {
 		if (consume(EQUAL) || consume(NOTEQ)) {
+			tkop = consumedTk;
 			if (exprRel(&rve)) {
 				ATIP_START
 					if (rv->type.typeBase == TB_STRUCT || rve.type.typeBase == TB_STRUCT)
 						tkerr(crtToken, "a structure cannot be compared");
+					//GC - start
+						i1 = rv->type.nElements < 0 ? getRVal(rv) : lastInstruction;
+						t1 = rv->type;
+
+						if (rv->type.nElements >= 0) {      // vectors
+							addInstr(tkop->code == EQUAL ? O_EQ_A : O_NOTEQ_A);
+						}
+						else {  // non-vectors
+							i2 = getRVal(&rve); t2 = rve.type;
+							t = getArithType(&t1, &t2);
+							addCastInstr(i1, &t1, &t);
+							addCastInstr(i2, &t2, &t);
+							if (tkop->code == EQUAL) {
+								switch (t.typeBase) {
+								case TB_INT:addInstr(O_EQ_I); break;
+								case TB_DOUBLE:addInstr(O_EQ_D); break;
+								case TB_CHAR:addInstr(O_EQ_C); break;
+								}
+							}
+							else {
+								switch (t.typeBase) {
+								case TB_INT:addInstr(O_NOTEQ_I); break;
+								case TB_DOUBLE:addInstr(O_NOTEQ_D); break;
+								case TB_CHAR:addInstr(O_NOTEQ_C); break;
+								}
+							}
+						}
+					//GC - end
 					rv->type = createType(TB_INT, -1);
 					rv->isCtVal = rv->isLVal = 0;
 				ATIP_END
@@ -574,15 +693,58 @@ int exprEq(RetVal* rv){
 //exprRel: exprRel ( LESS | LESSEQ | GREATER | GREATEREQ ) exprAdd | exprAdd  => exprAdd ((||||) exprAdd)*;
 int exprRel(RetVal* rv){
 	RetVal rve;
+	Instr* i1, * i2; // GC
+	Type t, t1, t2; // GC
+	Token *tkop;
 	if (!exprAdd(rv)) return 0;
 	while (1) {
 		if (consume(LESS) || consume(LESSEQ) || consume(GREATER) || consume(GREATEREQ)) {
+			tkop = consumedTk;
 			if (exprAdd(&rve)) {
 				ATIP_START
 					if (rv->type.nElements > -1 || rve.type.nElements > -1)
 						tkerr(crtToken, "an array cannot be compared");
 					if (rv->type.typeBase == TB_STRUCT || rve.type.typeBase == TB_STRUCT)
 						tkerr(crtToken, "a structure cannot be compared");
+					//GC - start
+					i1 = getRVal(rv); 
+					t1 = rv->type;
+
+					i2 = getRVal(&rve); t2 = rve.type;
+					t = getArithType(&t1, &t2);
+					addCastInstr(i1, &t1, &t);
+					addCastInstr(i2, &t2, &t);
+					switch (tkop->code) {
+					case LESS:
+						switch (t.typeBase) {
+						case TB_INT:addInstr(O_LESS_I); break;
+						case TB_DOUBLE:addInstr(O_LESS_D); break;
+						case TB_CHAR:addInstr(O_LESS_C); break;
+						}
+						break;
+					case LESSEQ:
+						switch (t.typeBase) {
+						case TB_INT:addInstr(O_LESSEQ_I); break;
+						case TB_DOUBLE:addInstr(O_LESSEQ_D); break;
+						case TB_CHAR:addInstr(O_LESSEQ_C); break;
+						}
+						break;
+					case GREATER:
+						switch (t.typeBase) {
+						case TB_INT:addInstr(O_GREATER_I); break;
+						case TB_DOUBLE:addInstr(O_GREATER_D); break;
+						case TB_CHAR:addInstr(O_GREATER_C); break;
+						}
+						break;
+					case GREATEREQ:
+						switch (t.typeBase) {
+						case TB_INT:addInstr(O_GREATEREQ_I); break;
+						case TB_DOUBLE:addInstr(O_GREATEREQ_D); break;
+						case TB_CHAR:addInstr(O_GREATEREQ_C); break;
+						}
+						break;
+					}
+					//GC - end
 					rv->type = createType(TB_INT, -1);
 					rv->isCtVal = rv->isLVal = 0;
 				ATIP_END
@@ -597,9 +759,13 @@ int exprRel(RetVal* rv){
 //exprAdd: exprAdd ( ADD | SUB ) exprMul | exprMul ; ==>  exprAdd = exprMul ((ADD|SUB) exprMul)*;
 int exprAdd(RetVal* rv){
 	RetVal rve;
+	Instr* i1, * i2; // GC
+	Type t1, t2; // GC
+	Token* tkop; // gc
 	if (!exprMul(rv)) return 0;
 	while (1) {
 		if (consume(ADD) || consume(SUB)) {
+			tkop = consumedTk;
 			if (exprMul(&rve)) {
 				ATIP_START
 					if (rv->type.nElements > -1 || rve.type.nElements > -1)
@@ -607,6 +773,26 @@ int exprAdd(RetVal* rv){
 					if (rv->type.typeBase == TB_STRUCT || rve.type.typeBase == TB_STRUCT)
 						tkerr(crtToken, "a structure cannot be added or subtracted");
 					rv->type = getArithType(&rv->type, &rve.type);
+					//GC - start
+					i1 = getRVal(rv); t1 = rv->type;
+					i2 = getRVal(&rve); t2 = rve.type;
+					addCastInstr(i1, &t1, &rv->type);
+					addCastInstr(i2, &t2, &rv->type);
+					if (tkop->code == ADD) {
+						switch (rv->type.typeBase) {
+						case TB_INT:addInstr(O_ADD_I); break;
+						case TB_DOUBLE:addInstr(O_ADD_D); break;
+						case TB_CHAR:addInstr(O_ADD_C); break;
+						}
+					}
+					else {
+						switch (rv->type.typeBase) {
+						case TB_INT:addInstr(O_SUB_I); break;
+						case TB_DOUBLE:addInstr(O_SUB_D); break;
+						case TB_CHAR:addInstr(O_SUB_C); break;
+						}
+					}
+					//GC - end
 					rv->isCtVal = rv->isLVal = 0;
 				ATIP_END
 			}
@@ -621,9 +807,13 @@ int exprAdd(RetVal* rv){
 //exprMul: exprMul ( MUL | DIV ) exprCast | exprCast;  ==> exprMul: exprCast ((MUL|DIV) exprCast)*; 
 int exprMul(RetVal* rv){
 	RetVal rve;
+	Instr* i1, * i2; // GC
+	Type t1, t2; // GC
+	Token* tkop; // gc
 	if (!exprCast(rv)) return 0;
 	while (1) {
 		if (consume(MUL) || consume(DIV)) {
+			tkop = consumedTk;
 			if (!exprCast(&rve)) tkerr(crtToken, SINTAXERR);
 			ATIP_START
 				if (rv->type.nElements > -1 || rve.type.nElements > -1)
@@ -631,6 +821,26 @@ int exprMul(RetVal* rv){
 				if (rv->type.typeBase == TB_STRUCT || rve.type.typeBase == TB_STRUCT)
 					tkerr(crtToken, "a structure cannot be multiplied or divided");
 				rv->type = getArithType(&rv->type, &rve.type);
+				//GC - start
+				i1 = getRVal(rv); t1 = rv->type;
+				i2 = getRVal(&rve); t2 = rve.type;
+				addCastInstr(i1, &t1, &rv->type);
+				addCastInstr(i2, &t2, &rv->type);
+				if (tkop->code == MUL) {
+					switch (rv->type.typeBase) {
+					case TB_INT:addInstr(O_MUL_I); break;
+					case TB_DOUBLE:addInstr(O_MUL_D); break;
+					case TB_CHAR:addInstr(O_MUL_C); break;
+					}
+				}
+				else {
+					switch (rv->type.typeBase) {
+					case TB_INT:addInstr(O_DIV_I); break;
+					case TB_DOUBLE:addInstr(O_DIV_D); break;
+					case TB_CHAR:addInstr(O_DIV_C); break;
+					}
+				}
+				//GC - end
 				rv->isCtVal = rv->isLVal = 0;
 			ATIP_END
 		}
@@ -640,8 +850,10 @@ int exprMul(RetVal* rv){
 }
 
 //exprCast: LPAR typeName RPAR exprCast | exprUnary ;
-int exprCast(RetVal* rv) {
+int exprCast(RetVal* rv) { // gc-ok
 	Token* start = crtToken;
+	Instr* startInstr = lastInstruction;
+
 	Type t;
 	RetVal rve;
 	if (consume(LPAR)) {
@@ -650,21 +862,47 @@ int exprCast(RetVal* rv) {
 				if (exprCast(&rve)) {
 					ATIP_START
 						cast(&t, &rve.type);
+						//GC - start
+							 // after "cast(&t,&rve.type);"
+							if (rv->type.nElements < 0 && rv->type.typeBase != TB_STRUCT) {
+								switch (rve.type.typeBase) {
+								case TB_CHAR:
+									switch (t.typeBase) {
+									case TB_INT:addInstr(O_CAST_C_I); break;
+									case TB_DOUBLE:addInstr(O_CAST_C_D); break;
+									}
+									break;
+								case TB_DOUBLE:
+									switch (t.typeBase) {
+									case TB_CHAR:addInstr(O_CAST_D_C); break;
+									case TB_INT:addInstr(O_CAST_D_I); break;
+									}
+									break;
+								case TB_INT:
+									switch (t.typeBase) {
+									case TB_CHAR:addInstr(O_CAST_I_C); break;
+									case TB_DOUBLE:addInstr(O_CAST_I_D); break;
+									}
+									break;
+								}
+							}
+						//GC - end
 						rv->type = t;
 						rv->isCtVal = rv->isLVal = 0;
 					ATIP_END
 					return 1;
 				}
 			}
-			else tkerr(crtToken, "tip declarat sub o forma invlida sau lipsa paranteza");
+			tkerr(crtToken, "tip declarat sub o forma invlida sau lipsa paranteza");
 		}
-		else tkerr(crtToken, "nume de tip invalid");
+		crtToken = start;
+		deleteInstructionsAfter(startInstr);
 	}
 	return exprUnary(rv);
 }
 
 //exprUnary: ( SUB | NOT ) exprUnary | exprPostfix ;
-int exprUnary(RetVal* rv) {
+int exprUnary(RetVal* rv) { // gc-ok
 	Token* tkop;
 
 	if (consume(SUB) || consume(NOT)) {
@@ -675,9 +913,36 @@ int exprUnary(RetVal* rv) {
 					if (rv->type.nElements >= 0)tkerr(crtToken, "unary '-' cannot be applied to an array");
 					if (rv->type.typeBase == TB_STRUCT)
 						tkerr(crtToken, "unary '-' cannot be applied to a struct");
+					//GC - start
+						// after "if(rv->type.typeBase==TB_STRUCT)
+						//		tkerr(crtTk,"unary '-' cannot be applied to a struct");"
+						getRVal(rv);
+						switch (rv->type.typeBase) {
+							case TB_CHAR:addInstr(O_NEG_C); break;
+							case TB_INT:addInstr(O_NEG_I); break;
+							case TB_DOUBLE:addInstr(O_NEG_D); break;
+						}
+
+					//GC - end
 				}
 				else {  // NOT
-					if (rv->type.typeBase == TB_STRUCT)tkerr(crtToken, "'!' cannot be applied to a struct");
+					if (rv->type.typeBase == TB_STRUCT)
+						tkerr(crtToken, "'!' cannot be applied to a struct");
+					//GC - start
+						// after "if(rv->type.typeBase==TB_STRUCT)
+						//	tkerr(crtTk,"'!' cannot be applied to a struct");"
+						if (rv->type.nElements < 0) {
+							getRVal(rv);
+							switch (rv->type.typeBase) {
+							case TB_CHAR:addInstr(O_NOT_C); break;
+							case TB_INT:addInstr(O_NOT_I); break;
+							case TB_DOUBLE:addInstr(O_NOT_D); break;
+							}
+						}
+						else {
+							addInstr(O_NOT_A);
+						}
+					//GC - end
 					rv->type = createType(TB_INT, -1);
 				}
 				rv->isCtVal = rv->isLVal = 0;
@@ -694,7 +959,7 @@ int exprUnary(RetVal* rv) {
            | exprPrimary:rv ;		
 		   
 exprPostfix:rv : exprPrimary:rv exprPostfix':rv;
-exprPostfix':rv : LBRACKET expr:rve {1} RBRACKET exprPostfix':rv | DOT ID {2} exprPostfix' | eps;
+exprPostfix':rv : LBRACKET expr:rve {1} RBRACKET {3} exprPostfix':rv | DOT ID {2} {4} exprPostfix' | eps;
 		   
 		   {1}  if(rv->type.nElements<0)tkerr(crtTk,"only an array can be indexed");
             Type typeInt=createType(TB_INT,-1);
@@ -727,6 +992,15 @@ int exprPostfixP(RetVal* rv) {
 			rv->isCtVal = 0;
 		ATIP_END
 		if (!consume(RBRACKET)) tkerr(crtToken, "expresie invalida intre paranteze sau paranteze patrate dezechilibrate");
+		//GC - start
+			addCastInstr(lastInstruction, &rve.type, &typeInt);
+			getRVal(&rve);
+			if (typeBaseSize(&rv->type) != 1) {
+				addInstrI(O_PUSHCT_I, typeBaseSize(&rv->type));
+				addInstr(O_MUL_I);
+			}
+			addInstr(O_OFFSET);
+		//GC - end
 		exprPostfixP(rv);
 	}
 	else if (consume(DOT)) {
@@ -742,6 +1016,12 @@ int exprPostfixP(RetVal* rv) {
 				rv->type = sMember->type;
 				rv->isLVal = 1;
 				rv->isCtVal = 0;
+				//GC - start
+					if (sMember->offset) {
+						addInstrI(O_PUSHCT_I, sMember->offset);
+						addInstr(O_OFFSET);
+					}
+				//GC - end
 			}
 		ATIP_END
 		exprPostfixP(rv);
@@ -749,7 +1029,7 @@ int exprPostfixP(RetVal* rv) {
 	return 1; // | eps
 }
 
-int exprPostfix(RetVal* rv) {
+int exprPostfix(RetVal* rv) { // gc-ok
 	if (!exprPrimary(rv)) return 0;
 	exprPostfixP(rv); // nu are rost sa verific findca are epsilon in constructie
 	return 1;
@@ -761,19 +1041,20 @@ int exprPostfix(RetVal* rv) {
            | CT_CHAR 
            | CT_STRING 
            | LPAR expr RPAR ;		*/
-int exprPrimary(RetVal* rv) {
+int exprPrimary(RetVal* rv) { // gc-ok
 	Token* tkName;
 	tkName = crtToken;
 	RetVal arg;
 	Symbol* struct_elems;
+	Instr* i;
 
 	if (consume(ID)) {
 		ATIP_START
 			struct_elems = findSymbol(&symbols, tkName->text);
-		if (!struct_elems){
-			tkerr(crtToken, "undefined symbol %s", tkName->text);
-			return;
-		}
+			if (!struct_elems){
+				tkerr(crtToken, "undefined symbol %s", tkName->text);
+				return 0; // ii pus pentru ca dadea warning de "null pointer deferencing" la linia cu Struct** mai jos; stiu ca nu ajunge niciodata la acest return
+			}
 			else {
 				rv->type = struct_elems->type;
 				rv->isCtVal = 0;
@@ -790,6 +1071,15 @@ int exprPrimary(RetVal* rv) {
 				ATIP_START
 					if (crtDefArg == struct_elems->args.end)tkerr(crtToken, "too many arguments in call");
 					cast(&(*crtDefArg)->type, &arg.type);
+					//GC - start
+						if ((*crtDefArg)->type.nElements < 0) {  //only arrays are passed by addr
+							i = getRVal(&arg);
+						}
+						else {
+							i = lastInstruction;
+						}
+						addCastInstr(i, &arg.type, &(*crtDefArg)->type);
+					//GC - end
 					crtDefArg++;
 				ATIP_END
 				while (1) {
@@ -799,6 +1089,15 @@ int exprPrimary(RetVal* rv) {
 							ATIP_START
 								if (crtDefArg == struct_elems->args.end)tkerr(crtToken, "too many arguments in call");
 								cast(&(*crtDefArg)->type, &arg.type);
+								//GC - start
+									if ((*crtDefArg)->type.nElements < 0) {
+										i = getRVal(&arg);
+									}
+									else {
+										i = lastInstruction;
+									}
+									addCastInstr(i, &arg.type, &(*crtDefArg)->type);
+								//GC - end
 								crtDefArg++;
 							ATIP_END
 						}
@@ -813,6 +1112,10 @@ int exprPrimary(RetVal* rv) {
 					rv->type = struct_elems->type;
 					rv->isCtVal = rv->isLVal = 0;
 				ATIP_END
+				//GC - start
+					i = addInstr(struct_elems->cls == CLS_FUNC ? O_CALL : O_CALLEXT);
+					i->args[0].addr = struct_elems->addr;
+				//GC - end
 			}
 		}
 		else {
@@ -820,7 +1123,14 @@ int exprPrimary(RetVal* rv) {
 				if (struct_elems && (struct_elems->cls == CLS_FUNC || struct_elems->cls == CLS_EXTFUNC))
 					tkerr(crtToken, "missing call for function %s", tkName->text);
 			ATIP_END
-				
+			//GC - start
+				if (struct_elems->depth) {
+					addInstrI(O_PUSHFPADDR, struct_elems->offset);
+				}
+				else {
+					addInstrA(O_PUSHCT_A, struct_elems->addr);
+				}
+			//GC - end
 		}
 		return 1;
 	}
@@ -832,6 +1142,7 @@ int exprPrimary(RetVal* rv) {
 			rv->isCtVal = 1; 
 			rv->isLVal = 0;
 		ATIP_END
+		addInstrI(O_PUSHCT_I, tkName->i);//gc
 		return 1;
 	}
 	if (consume(CT_REAL)) {
@@ -841,6 +1152,10 @@ int exprPrimary(RetVal* rv) {
 			rv->isCtVal = 1; 
 			rv->isLVal = 0;
 		ATIP_END
+		//GC - start
+			i = addInstr(O_PUSHCT_D); 
+			i->args[0].d = tkName->r;
+		//GC - end
 		return 1;
 	}
 	if (consume(CT_CHAR)) {
@@ -850,6 +1165,7 @@ int exprPrimary(RetVal* rv) {
 			rv->isCtVal = 1; 
 			rv->isLVal = 0;
 		ATIP_END
+		addInstrI(O_PUSHCT_C, tkName->i); //gc
 		return 1;
 	}
 	if (consume(CT_STRING)) {
@@ -859,6 +1175,7 @@ int exprPrimary(RetVal* rv) {
 			rv->isCtVal = 1; 
 			rv->isLVal = 0;
 		ATIP_END
+		addInstrA(O_PUSHCT_A, tkName->text); //gc
 		return 1;
 	}
 	if (consume(LPAR)) {

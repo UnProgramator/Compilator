@@ -8,6 +8,7 @@
 extern Token * crtToken;
 
 int sizeArgs, offset;
+Instr* labelMain;
 
 int typeBaseSize(Type* type)
 {
@@ -18,7 +19,7 @@ int typeBaseSize(Type* type)
 		case TB_DOUBLE:size = sizeof(double); break;
 		case TB_CHAR:size = sizeof(char); break;
 		case TB_STRUCT:
-			for (is = type->s->members.begin; is != type->s->members.end; is++) {
+			for (is = type->struct_elems->members.begin; is != type->struct_elems->members.end; is++) {
 				size += typeFullSize(&(*is)->type);
 			}
 			break;

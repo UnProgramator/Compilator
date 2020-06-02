@@ -1,8 +1,7 @@
 #include "token.h"
 #include <stdio.h>
 #include <stdarg.h>
-
-extern void exit(int);
+#include <stdlib.h>
 
 void err(const char* fmt, ...)
 {

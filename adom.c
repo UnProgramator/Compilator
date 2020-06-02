@@ -22,18 +22,19 @@ Symbol* addSymbol(Symbols* symbols, const char* name, enum CLS cls)
 	if (symbols->end == symbols->after) { // create more room
 		const int count = symbols->after - symbols->begin;
 		int n = count * 2; // double the room
-		if (n == 0){
+		if (n == 0) {
 			n = 10; // needed for the initial case
 			symbols->begin = (Symbol**)malloc(n * sizeof(Symbol*));
-		}	
-		else
+		}
+		else {
 			symbols->begin = (Symbol**)realloc(symbols->begin, n * sizeof(Symbol*));
-		if (symbols->begin == NULL) err("not enough memory");
+			if (symbols->begin == NULL) err("not enough memory");
+		}
 		symbols->end = symbols->begin + count;
 		symbols->after = symbols->begin + n;
 	}
 	SAFEALLOC(struct_elems, Symbol);
-	*symbols->end++ = struct_elems;
+	*(symbols->end++) = struct_elems;
 	struct_elems->name = name;
 	struct_elems->cls = cls;
 	struct_elems->depth = crtDepth;

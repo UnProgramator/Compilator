@@ -4,6 +4,7 @@
 #include "mv.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
 
 Symbol* addExtFunc(const char* name, Type type, void*addr)
 {
@@ -75,8 +76,10 @@ void put_i()
 void get_i()
 {
 	int i;
-	scanf("%d", &i);
-	pushi(i);
+	if(scanf("%d", &i)==1)
+		pushi(i);
+	else
+		err("Eroare la citirea de la tastatra");
 }
 
 void put_d()
@@ -87,8 +90,10 @@ void put_d()
 void get_d()
 {
 	int i;
-	scanf("%d", &i);
-	pushi(i);
+	if (scanf("%d", &i) == 1)
+		pushi(i);
+	else
+		err("Eroare la citirea de la tastatra");
 }
 
 void put_c()
@@ -99,12 +104,11 @@ void put_c()
 void get_c()
 {
 	pushc(getc(stdin));
-	
 }
 
 void seconds()
 {
-	printf("#%ld\n", popi());
+	pushd((double)(long double)time(0));
 }
 
 

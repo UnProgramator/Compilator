@@ -94,7 +94,7 @@ void testTot(int argc, char* argv[]) {
 		exit(1); // codul de eroare pentru apel necorespunzator este 1
 	}
 
-	const char fis[] = "9.c";
+	const char fis[] = "gc_test.c";
 
 	filename = createName(argv[1], fis);
 	printf("%s\n", filename);
@@ -112,7 +112,10 @@ void testTot(int argc, char* argv[]) {
 	}
 
 	//partea de testare a codului generat
-	//run(labelMain);
+	printf("\noperations\n");
+	printInstr(labelMain);
+	printf("\n\nrun\n\n");
+	run(labelMain);
 }
 
 int main(int argc, char* argv[]) {

@@ -69,11 +69,16 @@ int unit() {
 		else break;
 	}
 	if (consume(END)) {
-		labelMain->args[0].addr = findSymbol(&symbols, "main")->addr;
+		Symbol* main_symboladd;
+		if ((main_symboladd = findSymbol(&symbols, "main"))==NULL) {
+			tkerr(crtToken, "Lipseste functia void main()");
+		}
+		else
+			labelMain->args[0].addr = main_symboladd->addr;
 		return 1;
 	}
 	else {
-		tkerr(crtToken, "Eroare: sintaxa nedefinita");
+		tkerr(start, "Eroare: sintaxa nedefinita");
 	}
 
 	deleteInstructionsAfter(startInstr);
@@ -258,10 +263,11 @@ int typeName(Type* t) {
 /*declFunc: ( typeBase MUL? | VOID ) ID 
                         LPAR ( funcArg ( COMMA funcArg )* )? RPAR 
                         stmCompound ;	*/
-int declFunc() { //gc-nu
+int declFunc() { //gc-ok
 	Token* start = crtToken;
 	Instr* startInstr = lastInstruction;
 
+	Symbol** ps;
 	Token* tkName;
 	int isFun = 0;
 	Type t;
@@ -283,6 +289,7 @@ int declFunc() { //gc-nu
 	else return 0;
 	if (consume(ID)) { //daca nu am id si am { at e declaratie de struct
 		tkName = consumedTk;
+		sizeArgs = offset = 0; //GC
 		if (consume(LPAR)) {
 
 			ADOM_START(verify_func)
@@ -297,7 +304,7 @@ int declFunc() { //gc-nu
 			if (funcArg()) {
 				while (1) {
 					if (consume(COMMA)) {
-						if (funcArg) {
+						if (funcArg()) {
 							continue;
 						}
 						else tkerr(crtToken, "declaratie de parametru invalida sau virgula in plus");
@@ -310,9 +317,27 @@ int declFunc() { //gc-nu
 				ADOM_START(adjust_depth)
 				crtDepth--;
 				ADOM_END
+				//GC - start
+					crtFunc->addr = addInstr(O_ENTER);
+					sizeArgs = offset;
+					//update args offsets for correct FP indexing
+					for (ps = symbols.begin; ps != symbols.end; ps++) {
+						if ((*ps)->mem == MEM_ARG) {
+							//2*sizeof(void*) == sizeof(retAddr)+sizeof(FP)
+							(*ps)->offset -= sizeArgs + 2 * sizeof(void*);
+						}
+					}
+					offset = 0;
+				//GC - end
 				if (stmCompound()) { // 1- trebuie neaparat acolada deschisa - in caz ca nu e da eroare
 					ADOM_START(elim_local_var)
 						deleteSymbolsAfter(&symbols, crtFunc);
+						//GC - start
+							((Instr*)crtFunc->addr)->args[0].i = offset;  // setup the ENTER argument 
+							if (crtFunc->type.typeBase == TB_VOID) {
+								addInstrII(O_RET, sizeArgs, 0);
+							}
+						//GC - end
 						crtFunc = NULL;
 					ADOM_END
 					return 1;
@@ -344,17 +369,20 @@ int funcArg() { //gc-ok
 				Symbol* struct_elems = addSymbol(&symbols, tkName->text, CLS_VAR);
 				struct_elems->mem = MEM_ARG;
 				struct_elems->type = t;
+				//GC - start
+					//for each "s" (the one as local var and the one as arg):
+					struct_elems->offset = offset;
+				//GC - end
 				struct_elems = addSymbol(&crtFunc->args, tkName->text, CLS_VAR);
 				struct_elems->mem = MEM_ARG;
 				struct_elems->type = t;
+				//GC - start
+					//for each "s" (the one as local var and the one as arg):
+					struct_elems->offset = offset;
+					//only once at the end, after "offset" is used and "s->type" is set
+					offset += typeArgSize(&struct_elems->type);
+				//GC - end
 			ADOM_END
-			//GC - start
-				//for each "s" (the one as local var and the one as arg):
-				struct_elems->offset = offset;
-				//only once at the end, after "offset" is used and "s->type" is set
-				offset += typeArgSize(&struct_elems->type);
-
-			//GC - end
 			return 1;
 		}
 		else tkerr(crtToken, "ID parametru functie invalid sau inexistent");
@@ -374,6 +402,7 @@ int funcArg() { //gc-ok
            | expr? SEMICOLON ;		*/
 static int _ifStm() {
 	RetVal rv;
+	Instr* i, * i1, * i2, * i3, * i4, * is, * ib3, * ibs;//gc
 	if (!consume(IF)) return 0;
 	if (!consume(LPAR)) tkerr(crtToken, "lipsa ( dupa if");
 	if (!expr(&rv)) tkerr(crtToken, "conditia din if nu are o forma valida");
@@ -382,15 +411,26 @@ static int _ifStm() {
 			tkerr(crtToken, "a structure cannot be logically tested");
 	ATIP_END
 	if (!consume(RPAR)) tkerr(crtToken, "expresia conditie din if nu are o forma valida sau paranteze dezechilibrate");
+	i1 = createCondJmp(&rv);//GC
 	if (!stm()) tkerr(crtToken, "corpul lui if nu are o forma corespunzatoare");
 	if (consume(ELSE)) {
+		i2 = addInstr(O_JMP); //GC
 		if (!stm()) tkerr(crtToken,"corpul lui else nu are o forma corespunzatoare");
+		//GC
+			i1->args[0].addr = i2->next;
+			i1 = i2;
 	}
+	i1->args[0].addr = addInstr(O_NOP);//GC
 	return 1;
 }
 static int _whileStm() {
 	RetVal rv;
+	Instr* i, * i1, * i2, * i3, * i4, * is, * ib3, * ibs;//gc
 	if (!consume(WHILE)) return 0;
+	//GC
+		Instr* oldLoopEnd = crtLoopEnd;
+		crtLoopEnd = createInstr(O_NOP);
+		i1 = lastInstruction;
 	if (!consume(LPAR)) tkerr(crtToken, "sintaxa invalida, lipsa ( dupa while");
 	if (!expr(&rv)) tkerr(crtToken, "Erpresie invalida in conditia din while");
 	ATIP_START
@@ -398,47 +438,109 @@ static int _whileStm() {
 			tkerr(crtToken, "a structure cannot be logically tested");
 	ATIP_END
 	if (!consume(RPAR)) tkerr(crtToken, "sintaxa invalida, expresie invalida in while sau paranteze rotunde dezechilibrate in while");
+	i2 = createCondJmp(&rv);//GC
 	if (!stm()) tkerr(crtToken, "corpul while are o forma necorespunzatoare");
+	//GC
+		addInstrA(O_JMP, i1->next);
+		insertInstrAfter(lastInstruction, crtLoopEnd);
+		i2->args[0].addr = crtLoopEnd;
+		crtLoopEnd = oldLoopEnd;
 	return 1;
 }
 static int _forStm() {
 	RetVal rv1, rv2, rv3;
+	//GC
+		Instr* i, * i1, * i2, * i3, * i4, * is, * ib3, * ibs;
 	if (!consume(FOR)) return 0;
+	//GC
+		Instr* oldLoopEnd = crtLoopEnd;
+		crtLoopEnd = createInstr(O_NOP);
 	if (!consume(LPAR)) tkerr(crtToken, "sintaxa invalida, lipsa ( dupa for");
-	expr(&rv1);
+	if (expr(&rv1)) {
+		if (typeArgSize(&rv1.type))
+			addInstrI(O_DROP, typeArgSize(&rv1.type));
+	}
 	if (!consume(SEMICOLON)) tkerr(crtToken, "sintaxa invalida, lipsa ; dupa prima expresie din for");
+	i2 = lastInstruction;//GC
 	if (expr(&rv2)) {
 		ATIP_START
 			if (rv2.type.typeBase == TB_STRUCT)
 				tkerr(crtToken, "a structure cannot be logically tested");
 		ATIP_END
+		//GC - start
+			i4 = createCondJmp(&rv2);
+	}
+	else {
+			i4 = NULL;
+		//GC - end
 	}
 	if (!consume(SEMICOLON)) tkerr(crtToken, "sintaxa invalida, lipsa ; dupa a doua expresie din for");
-	expr(&rv3);
+	ib3 = lastInstruction;//GC
+	if (expr(&rv3)) {
+		if (typeArgSize(&rv3.type))
+			addInstrI(O_DROP, typeArgSize(&rv3.type));
+	}
 	if (!consume(RPAR)) tkerr(crtToken, "sintaxa invalida, expresie invalida sau paranteze rotunde dezechilibrate in for");
+	ibs = lastInstruction;//GC
 	if (!stm()) tkerr(crtToken, "sintaxa invalida in corpul for");
+	//GC - start
+		if (ib3 != ibs) {
+			i3 = ib3->next;
+			is = ibs->next;
+			ib3->next = is;
+			is->last = ib3;
+			lastInstruction->next = i3;
+			i3->last = lastInstruction;
+			ibs->next = NULL;
+			lastInstruction = ibs;
+		}
+		addInstrA(O_JMP, i2->next);
+		insertInstrAfter(lastInstruction, crtLoopEnd);
+		if (i4)
+			i4->args[0].addr = crtLoopEnd;
+		crtLoopEnd = oldLoopEnd;
+	//GC - end
 	return 1;
 }
 static int _breakStm() {
+
 	if (!consume(BREAK)) return 0;
 	if (!consume(SEMICOLON)) tkerr(crtToken, "lipsa ; dupa break");
+	//GC - 
+		if (!crtLoopEnd)tkerr(crtToken, "break without for or while");
+		addInstrA(O_JMP, crtLoopEnd);
 	return 1;
 }
 static int _returnStm() {
 	RetVal rv;	
+	Instr* i;
 	if (!consume(RETURN)) return 0;
 	expr(&rv);
+	//GC - start
+		i = getRVal(&rv);
+		addCastInstr(i, &rv.type, &crtFunc->type);
+	//GC - end
 	ATIP_START
 		if (crtFunc->type.typeBase == TB_VOID)
 			tkerr(crtToken, "a void function cannot return a value");
 		cast(&crtFunc->type, &rv.type);
 	ATIP_END
 	if (!consume(SEMICOLON)) tkerr(crtToken, "lipseste ; dupa intructiunea");
+	//GC - start
+		if (crtFunc->type.typeBase == TB_VOID) {
+			addInstrII(O_RET, sizeArgs, 0);
+		}
+		else {
+			addInstrII(O_RET, sizeArgs, typeArgSize(&crtFunc->type));
+		}
+	//GC - end
 	return 1;
 }
 static int _exprStm() {
 	RetVal rv;
 	if (expr(&rv)) {
+		if (typeArgSize(&rv.type))
+			addInstrI(O_DROP, typeArgSize(&rv.type));//GC
 		if (consume(SEMICOLON))
 			return 1; 
 		else 
@@ -448,7 +550,7 @@ static int _exprStm() {
 }
 
 
-int stm() { //gc-nu
+int stm() { //gc-pentru break, return, expr
 	if (stmCompound()) return 1;
 	if (_ifStm()) return 1;
 	if (_whileStm()) return 1;
@@ -558,13 +660,14 @@ int exprOr(RetVal* rv){ // gc-ok
 	if (!exprAnd(rv)) return 0;
 	while (1) {
 		if (consume(OR)) {
+			//GC
+				i1 = rv->type.nElements < 0 ? getRVal(rv) : lastInstruction;
+				t1 = rv->type;
 			if (exprAnd(&rve)) {
 				ATIP_START
 					if (rv->type.typeBase == TB_STRUCT || rve.type.typeBase == TB_STRUCT)
 						tkerr(crtToken, "a structure cannot be logically tested");
 					//GC - start
-						i1 = rv->type.nElements < 0 ? getRVal(rv) : lastInstruction;
-						t1 = rv->type;
 						if (rv->type.nElements >= 0) {      // vectors
 							addInstr(O_OR_A);
 						}
@@ -600,14 +703,14 @@ int exprAnd(RetVal* rv) { //gc-ok
 	if (!exprEq(rv)) return 0;
 	while (1) {
 		if (consume(AND)) {
+			//GC
+				i1 = rv->type.nElements < 0 ? getRVal(rv) : lastInstruction;
+				t1 = rv->type;
 			if (exprEq(&rve)) {
 				ATIP_START
 					if (rv->type.typeBase == TB_STRUCT || rve.type.typeBase == TB_STRUCT)
 						tkerr(crtToken, "a structure cannot be logically tested");
 					//GC - start
-						i1 = rv->type.nElements < 0 ? getRVal(rv) : lastInstruction;
-						t1 = rv->type;
-
 						if (rv->type.nElements >= 0) {      // vectors
 							addInstr(O_AND_A);
 						}
@@ -646,14 +749,14 @@ int exprEq(RetVal* rv){ //gc-ok
 	while (1) {
 		if (consume(EQUAL) || consume(NOTEQ)) {
 			tkop = consumedTk;
+			//GC
+				i1 = rv->type.nElements < 0 ? getRVal(rv) : lastInstruction;
+				t1 = rv->type;
 			if (exprRel(&rve)) {
 				ATIP_START
 					if (rv->type.typeBase == TB_STRUCT || rve.type.typeBase == TB_STRUCT)
 						tkerr(crtToken, "a structure cannot be compared");
 					//GC - start
-						i1 = rv->type.nElements < 0 ? getRVal(rv) : lastInstruction;
-						t1 = rv->type;
-
 						if (rv->type.nElements >= 0) {      // vectors
 							addInstr(tkop->code == EQUAL ? O_EQ_A : O_NOTEQ_A);
 						}
@@ -700,6 +803,7 @@ int exprRel(RetVal* rv){
 	while (1) {
 		if (consume(LESS) || consume(LESSEQ) || consume(GREATER) || consume(GREATEREQ)) {
 			tkop = consumedTk;
+			i1 = getRVal(rv);t1 = rv->type; //GC
 			if (exprAdd(&rve)) {
 				ATIP_START
 					if (rv->type.nElements > -1 || rve.type.nElements > -1)
@@ -707,9 +811,6 @@ int exprRel(RetVal* rv){
 					if (rv->type.typeBase == TB_STRUCT || rve.type.typeBase == TB_STRUCT)
 						tkerr(crtToken, "a structure cannot be compared");
 					//GC - start
-					i1 = getRVal(rv); 
-					t1 = rv->type;
-
 					i2 = getRVal(&rve); t2 = rve.type;
 					t = getArithType(&t1, &t2);
 					addCastInstr(i1, &t1, &t);
@@ -766,6 +867,7 @@ int exprAdd(RetVal* rv){
 	while (1) {
 		if (consume(ADD) || consume(SUB)) {
 			tkop = consumedTk;
+			i1 = getRVal(rv); t1 = rv->type; // gc
 			if (exprMul(&rve)) {
 				ATIP_START
 					if (rv->type.nElements > -1 || rve.type.nElements > -1)
@@ -774,24 +876,23 @@ int exprAdd(RetVal* rv){
 						tkerr(crtToken, "a structure cannot be added or subtracted");
 					rv->type = getArithType(&rv->type, &rve.type);
 					//GC - start
-					i1 = getRVal(rv); t1 = rv->type;
-					i2 = getRVal(&rve); t2 = rve.type;
-					addCastInstr(i1, &t1, &rv->type);
-					addCastInstr(i2, &t2, &rv->type);
-					if (tkop->code == ADD) {
-						switch (rv->type.typeBase) {
-						case TB_INT:addInstr(O_ADD_I); break;
-						case TB_DOUBLE:addInstr(O_ADD_D); break;
-						case TB_CHAR:addInstr(O_ADD_C); break;
+						i2 = getRVal(&rve); t2 = rve.type;
+						addCastInstr(i1, &t1, &rv->type);
+						addCastInstr(i2, &t2, &rv->type);
+						if (tkop->code == ADD) {
+							switch (rv->type.typeBase) {
+							case TB_INT:addInstr(O_ADD_I); break;
+							case TB_DOUBLE:addInstr(O_ADD_D); break;
+							case TB_CHAR:addInstr(O_ADD_C); break;
+							}
 						}
-					}
-					else {
-						switch (rv->type.typeBase) {
-						case TB_INT:addInstr(O_SUB_I); break;
-						case TB_DOUBLE:addInstr(O_SUB_D); break;
-						case TB_CHAR:addInstr(O_SUB_C); break;
+						else {
+							switch (rv->type.typeBase) {
+							case TB_INT:addInstr(O_SUB_I); break;
+							case TB_DOUBLE:addInstr(O_SUB_D); break;
+							case TB_CHAR:addInstr(O_SUB_C); break;
+							}
 						}
-					}
 					//GC - end
 					rv->isCtVal = rv->isLVal = 0;
 				ATIP_END
@@ -814,6 +915,7 @@ int exprMul(RetVal* rv){
 	while (1) {
 		if (consume(MUL) || consume(DIV)) {
 			tkop = consumedTk;
+			i1 = getRVal(rv); t1 = rv->type; //GC
 			if (!exprCast(&rve)) tkerr(crtToken, SINTAXERR);
 			ATIP_START
 				if (rv->type.nElements > -1 || rve.type.nElements > -1)
@@ -822,7 +924,6 @@ int exprMul(RetVal* rv){
 					tkerr(crtToken, "a structure cannot be multiplied or divided");
 				rv->type = getArithType(&rv->type, &rve.type);
 				//GC - start
-				i1 = getRVal(rv); t1 = rv->type;
 				i2 = getRVal(&rve); t2 = rve.type;
 				addCastInstr(i1, &t1, &rv->type);
 				addCastInstr(i2, &t2, &rv->type);
@@ -858,10 +959,12 @@ int exprCast(RetVal* rv) { // gc-ok
 	RetVal rve;
 	if (consume(LPAR)) {
 		if (typeName(&t)) {
-			if (consume(LPAR)) {
+			if (consume(RPAR)) {
 				if (exprCast(&rve)) {
 					ATIP_START
 						cast(&t, &rve.type);
+						rv->type = t;
+						rv->isCtVal = rv->isLVal = 0;
 						//GC - start
 							 // after "cast(&t,&rve.type);"
 							if (rv->type.nElements < 0 && rv->type.typeBase != TB_STRUCT) {
@@ -887,8 +990,6 @@ int exprCast(RetVal* rv) { // gc-ok
 								}
 							}
 						//GC - end
-						rv->type = t;
-						rv->isCtVal = rv->isLVal = 0;
 					ATIP_END
 					return 1;
 				}
@@ -1047,6 +1148,8 @@ int exprPrimary(RetVal* rv) { // gc-ok
 	RetVal arg;
 	Symbol* struct_elems;
 	Instr* i;
+	Token* start = crtToken;
+	Instr* oltLast = lastInstruction;
 
 	if (consume(ID)) {
 		ATIP_START
@@ -1179,9 +1282,13 @@ int exprPrimary(RetVal* rv) { // gc-ok
 		return 1;
 	}
 	if (consume(LPAR)) {
-		if (!expr(rv)) tkerr(crtToken, "Expresie invalida sau absenta");	
-		if (!consume(RPAR)) tkerr(crtToken, "Expresie invalida intre paranteze rotunde sau paranteze dezechilibrate");
+		if (expr(rv)) {
+			if (!consume(RPAR)) 
+				tkerr(crtToken, "Expresie invalida intre paranteze rotunde sau paranteze dezechilibrate");
+			return 1;
+		}
 	}
-
+	crtToken = start;
+	deleteInstructionsAfter(oltLast);
 	return 0;
 }

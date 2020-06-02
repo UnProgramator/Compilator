@@ -9,6 +9,7 @@ extern Token * crtToken;
 
 int sizeArgs, offset;
 Instr* labelMain;
+Instr* crtLoopEnd;
 
 int typeBaseSize(Type* type)
 {
@@ -97,5 +98,13 @@ Instr* createCondJmp(RetVal* rv)
 		case TB_INT:return addInstr(O_JF_I);
 		default:return NULL;
 		}
+	}
+}
+
+
+void printInstr(Instr* start) {
+	while (start) {
+		printf("%d -> %p\n", start->opcode, start->next);
+		start = start->next;
 	}
 }

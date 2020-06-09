@@ -69,12 +69,14 @@ int unit() {
 		else break;
 	}
 	if (consume(END)) {
+		//GC
 		Symbol* main_symboladd;
 		if ((main_symboladd = findSymbol(&symbols, "main"))==NULL) {
 			tkerr(crtToken, "Lipseste functia void main()");
 		}
 		else
 			labelMain->args[0].addr = main_symboladd->addr;
+		//GC
 		return 1;
 	}
 	else {
@@ -118,7 +120,7 @@ int declStruct() { //gc-ok
 					}
 					else tkerr(crtToken, "Lipseste punct si virgula ; dupa incheierea declaratiei structurii");
 				}
-				else tkerr(crtToken, "Lipseste acolada inchisa");
+				else tkerr(crtToken, "Lipseste acolada inchisa sau este o eroare de sintaxa inainte de }");
 			}
 		}
 		else tkerr(crtToken, "numele structurii este invalid sau lipseste");
@@ -515,16 +517,17 @@ static int _returnStm() {
 	RetVal rv;	
 	Instr* i;
 	if (!consume(RETURN)) return 0;
-	expr(&rv);
-	//GC - start
+	if (expr(&rv)) {
+		//GC - start
 		i = getRVal(&rv);
 		addCastInstr(i, &rv.type, &crtFunc->type);
-	//GC - end
-	ATIP_START
-		if (crtFunc->type.typeBase == TB_VOID)
-			tkerr(crtToken, "a void function cannot return a value");
+		//GC - end
+		ATIP_START
+			if (crtFunc->type.typeBase == TB_VOID)
+				tkerr(crtToken, "a void function cannot return a value");
 		cast(&crtFunc->type, &rv.type);
-	ATIP_END
+		ATIP_END
+	}
 	if (!consume(SEMICOLON)) tkerr(crtToken, "lipseste ; dupa intructiunea");
 	//GC - start
 		if (crtFunc->type.typeBase == TB_VOID) {

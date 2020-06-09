@@ -234,35 +234,35 @@ void run(Instr* IP)
 		case O_CAST_C_D:
 			cVal1 = popc();
 			dVal1 = (double)cVal1;
-			printf("CAST_I_D\t(%c -> %g)\n", cVal1, dVal1);
+			printf("CAST_C_D\t(%c -> %g)\n", cVal1, dVal1);
 			pushd(dVal1);
 			IP = IP->next;
 			break;
 		case O_CAST_C_I:
 			cVal1 = popc();
 			iVal1 = (int)cVal1;
-			printf("CAST_I_D\t(%c -> %d)\n", iVal1, iVal1);
+			printf("CAST_C_I\t(%c -> %d)\n", cVal1, iVal1);
 			pushi(iVal1);
 			IP = IP->next;
 			break;
 		case O_CAST_D_C:
 			dVal1 = popd();
 			cVal1 = (char)dVal1;
-			printf("CAST_I_D\t(%g -> %c)\n", dVal1, cVal1);
+			printf("CAST_D_C\t(%g -> %c)\n", dVal1, cVal1);
 			pushc(cVal1);
 			IP = IP->next;
 			break;
 		case O_CAST_D_I:
 			dVal1 = popd();
 			iVal1 = (int)dVal1;
-			printf("CAST_I_D\t(%g -> %d)\n", dVal1, iVal1);
+			printf("CAST_D_I\t(%g -> %d)\n", dVal1, iVal1);
 			pushi(iVal1);
 			IP = IP->next;
 			break;
 		case O_CAST_I_C:
 			iVal1 = popi();
 			cVal1 = (char)iVal1;
-			printf("CAST_I_D\t(%d -> %c)\n", iVal1, cVal1);
+			printf("CAST_I_C\t(%d -> %c)\n", iVal1, cVal1);
 			pushc(cVal1);
 			IP = IP->next;
 			break;
